@@ -1,24 +1,23 @@
 "use client";
-
 import React, { useRef, useState, Suspense } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { useTexture, Environment, Float } from "@react-three/drei";
 import * as THREE from "three";
-
-// Defining the available modes for our texture setup
-type MapMode = 1 | 2 | 3 | 4;
-
-interface BottleMeshProps {
-  mapMode: MapMode;
+interface TextureToggles {
+  diffuse: boolean;
+  normal: boolean;
+  roughness: boolean;
+  ao: boolean;
 }
 
-// Inner Mesh Component handling the 3D logic
-const BottleMesh: React.FC<BottleMeshProps> = ({ mapMode }) => {
+interface BottleMeshProps {
+  toggles: TextureToggles;
+}
+
+const BottleMesh: React.FC<BottleMeshProps> = ({ toggles }) => {
   const meshRef = useRef<THREE.Mesh>(null);
   const lightRef = useRef<THREE.PointLight>(null);
 
-  // Load all textures upfront to respect React Hook rules.
-  // We will selectively apply them based on the mapMode state.
   const [colorMap, normalMap, aoMap, roughnessMap] = useTexture([
     "/images/fanta_diffuse.png",
     "/images/fanta_normal.png",
@@ -26,12 +25,10 @@ const BottleMesh: React.FC<BottleMeshProps> = ({ mapMode }) => {
     "/images/fanta_roughness.png",
   ]);
 
-  // Interactive relighting and parallax calculation
   useFrame((state) => {
     const pointerX = state.pointer.x;
     const pointerY = state.pointer.y;
-
-    // Smoothly animate the light position
+    //light position
     if (lightRef.current) {
       lightRef.current.position.x = THREE.MathUtils.lerp(
         lightRef.current.position.x,
@@ -45,7 +42,6 @@ const BottleMesh: React.FC<BottleMeshProps> = ({ mapMode }) => {
       );
     }
 
-    // Smoothly tilt the plane
     if (meshRef.current) {
       meshRef.current.rotation.x = THREE.MathUtils.lerp(
         meshRef.current.rotation.x,
@@ -60,14 +56,16 @@ const BottleMesh: React.FC<BottleMeshProps> = ({ mapMode }) => {
     }
   });
 
-  // Dynamic prop assignment based on the selected mode
-  const activeNormalMap = mapMode >= 2 ? normalMap : null;
-  const activeRoughnessMap = mapMode >= 3 ? roughnessMap : null;
-  const activeAOMap = mapMode === 4 ? aoMap : null;
+  // Dynamic prop assignment based on individual checkboxes
+  // Diffuse is always true in the PBR material if the checkbox is checked, else we show a basic white shape.
+  const activeColorMap = toggles.diffuse ? colorMap : null;
+  const activeNormalMap = toggles.normal ? normalMap : null;
+  const activeRoughnessMap = toggles.roughness ? roughnessMap : null;
+  const activeAOMap = toggles.ao ? aoMap : null;
 
-  // If we don't have a roughness map (modes 1 & 2), we use clearcoat to fake the glass reflection.
-  // If we DO have a roughness map (modes 3 & 4), the map handles reflections, so we disable clearcoat.
-  const shouldUseFakeGlass = mapMode === 2;
+  // We add fake glass if normal is on BUT roughness is off.
+  // This fakes a full shiny bottle if we don't have the explicit roughness definitions yet.
+  const shouldUseFakeGlass = toggles.normal && !toggles.roughness;
 
   return (
     <>
@@ -86,31 +84,48 @@ const BottleMesh: React.FC<BottleMeshProps> = ({ mapMode }) => {
       <Float speed={2} rotationIntensity={0.1} floatIntensity={0.3}>
         <mesh ref={meshRef}>
           <planeGeometry args={[3, 4]} />
-          <meshPhysicalMaterial
-            map={colorMap}
-            map-colorSpace={THREE.SRGBColorSpace}
-            // Apply Normal Map if mode is 2 or higher
-            normalMap={activeNormalMap}
-            {...(activeNormalMap
-              ? { "normalMap-colorSpace": THREE.NoColorSpace }
-              : {})}
-            normalScale={
-              activeNormalMap
-                ? new THREE.Vector2(1.5, 1.5)
-                : new THREE.Vector2(0, 0)
-            }
-            // Apply Roughness Map if mode is 3 or higher
-            roughnessMap={activeRoughnessMap}
-            // Apply AO Map only if mode is 4
-            aoMap={activeAOMap}
-            transparent={true}
-            // Base physical properties
-            roughness={activeRoughnessMap ? 1 : 0.2}
-            metalness={0.1}
-            // The magic fallback for 2-map setups
-            clearcoat={shouldUseFakeGlass ? 1.0 : 0.0}
-            clearcoatRoughness={0.1}
-          />
+
+          {!toggles.diffuse &&
+          !toggles.normal &&
+          !toggles.roughness &&
+          !toggles.ao ? (
+            // If all are turned off, render a pure black silhouette shape so we can still see the plane outline
+            <meshBasicMaterial
+              color="#111111"
+              transparent={true}
+              opacity={0.5}
+            />
+          ) : (
+            <meshPhysicalMaterial
+              // Apply Diffuse Map
+              map={activeColorMap || undefined}
+              {...(activeColorMap
+                ? { "map-colorSpace": THREE.SRGBColorSpace }
+                : {})}
+              color={activeColorMap ? "#ffffff" : "#222222"} // Darken base if no diffuse image
+              // Apply Normal Map
+              normalMap={activeNormalMap || undefined}
+              {...(activeNormalMap
+                ? { "normalMap-colorSpace": THREE.NoColorSpace }
+                : {})}
+              normalScale={
+                activeNormalMap
+                  ? new THREE.Vector2(1.5, 1.5)
+                  : new THREE.Vector2(0, 0)
+              }
+              // Apply Roughness Map
+              roughnessMap={activeRoughnessMap || undefined}
+              // Base roughness (high if we have a map to mix it with, low if we don't but normal is on)
+              roughness={activeRoughnessMap ? 1 : 0.2}
+              // Apply AO Map
+              aoMap={activeAOMap || undefined}
+              transparent={true}
+              metalness={0.1}
+              // The magic fallback for glassy setups
+              clearcoat={shouldUseFakeGlass ? 1.0 : 0.0}
+              clearcoatRoughness={0.1}
+            />
+          )}
         </mesh>
       </Float>
     </>
@@ -118,68 +133,99 @@ const BottleMesh: React.FC<BottleMeshProps> = ({ mapMode }) => {
 };
 
 export default function PhantomBottle() {
-  // State to track which texture mode is currently active
-  const [mapMode, setMapMode] = useState<MapMode>(2);
+  const [toggles, setToggles] = useState<TextureToggles>({
+    diffuse: true,
+    normal: true,
+    roughness: false,
+    ao: false,
+  });
 
-  // UI Button configurations for the control panel
-  const modes = [
+  const handleToggle = (key: keyof TextureToggles) => {
+    setToggles((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const controls = [
+    { key: "diffuse", label: "Diffuse (Color)", desc: "Base image." },
     {
-      value: 1,
-      label: "Flat Diffuse (1 Map)",
-      desc: "Just the image, no 3D effect.",
+      key: "normal",
+      label: "Normal Map",
+      desc: "Adds fake 3D lighting curves.",
     },
     {
-      value: 2,
-      label: "2.5D Magic (2 Maps)",
-      desc: "Diffuse + Normal + Fake Glass.",
+      key: "roughness",
+      label: "Roughness",
+      desc: "Separates plastic gloss from paper matte.",
     },
     {
-      value: 3,
-      label: "Pro Material (3 Maps)",
-      desc: "Adds Roughness for label/glass separation.",
-    },
-    {
-      value: 4,
-      label: "Ultra Realism (4 Maps)",
-      desc: "Adds AO for micro-shadows.",
+      key: "ao",
+      label: "Ambient Occlusion",
+      desc: "Adds micro-shadows directly to texture crevices.",
     },
   ];
 
   return (
     <div className="w-full h-screen bg-[#050505] overflow-hidden relative font-sans">
-      {/* --- Control Panel UI --- */}
-      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-3">
+      <div className="absolute top-6 left-6 z-10 flex flex-col items-start gap-4 w-80 px-4">
         <h1 className="text-white text-xl font-bold tracking-wider opacity-80">
-          TEXTURE PIPELINE TESTER
+          TEXTURE PIPELINE
         </h1>
-        <div className="flex gap-2 bg-black/50 p-2 rounded-xl backdrop-blur-md border border-white/10">
-          {modes.map((mode) => (
-            <button
-              key={mode.value}
-              onClick={() => setMapMode(mode.value as MapMode)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-300 ${
-                mapMode === mode.value
-                  ? "bg-white text-black shadow-[0_0_15px_rgba(255,255,255,0.4)]"
-                  : "bg-transparent text-white/60 hover:text-white hover:bg-white/10"
-              }`}
-              title={mode.desc}
-            >
-              {mode.label}
-            </button>
-          ))}
+
+        <div className="flex flex-col gap-3 bg-black/70 p-4 rounded-xl backdrop-blur-md border border-white/10 w-full">
+          {controls.map((control) => {
+            const isChecked = toggles[control.key as keyof TextureToggles];
+            return (
+              <label
+                key={control.key}
+                className={`flex items-start gap-3 p-3 rounded-lg border transition-all cursor-pointer select-none ${
+                  isChecked
+                    ? "bg-white/10 border-white/30"
+                    : "bg-black border-white/5 opacity-60 hover:opacity-100"
+                }`}
+              >
+                <div className="relative flex items-center pt-1">
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={() =>
+                      handleToggle(control.key as keyof TextureToggles)
+                    }
+                    className="w-4 h-4 rounded border-gray-600 appearance-none bg-black/50 checked:bg-white checked:border-white focus:outline-none focus:ring-1 focus:ring-white transition-all peer"
+                  />
+                  <svg
+                    className="absolute w-4 h-4 pointer-events-none hidden peer-checked:block text-black p-[2px]"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <span
+                    className={`text-sm font-semibold transition-colors ${isChecked ? "text-white" : "text-white/70"}`}
+                  >
+                    {control.label}
+                  </span>
+                  <span className="text-[11px] text-white/40 max-w-[120px] leading-tight">
+                    {control.desc}
+                  </span>
+                </div>
+              </label>
+            );
+          })}
         </div>
-        <p className="text-white/50 text-xs mt-2 text-center max-w-md">
-          {modes.find((m) => m.value === mapMode)?.desc}
-        </p>
       </div>
 
-      {/* --- Three.js Canvas --- */}
       <Canvas
         camera={{ position: [0, 0, 5], fov: 50 }}
         gl={{ alpha: false, antialias: true }}
       >
         <Suspense fallback={null}>
-          <BottleMesh mapMode={mapMode} />
+          <BottleMesh toggles={toggles} />
         </Suspense>
       </Canvas>
     </div>
